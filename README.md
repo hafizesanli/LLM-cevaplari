@@ -113,3 +113,250 @@ You are an expert in Software Testing specialized in Model-Based Testing. A Grap
 ## Sonuç
 
 En iyi sonuç openrouter.ai sitesinde denenen Nemotron 3 Nano 30B A3B modelinden alınmıştır. Free olan modellerden ikinci ve üçüncü prompt verildiğinde kod alınmamıştır. Modellerin düşünme süreçleri incelendiğinde ne istendiğini tam anlamadıkları ve tahmin yürüttükleri gözlemlenmiştir. Bu yüzden promptta değişikliğe gidilmiştir. **Dördüncü prompt**la tekrar bütün modeller **_minimum 10 kez_** denenecektir. Bundan sonraki promptta daha basit bir model olan **TLC.json** kullanılacaktır ve prompt TLC modeline göre modifiye edilecektir.
+
+---
+
+# GraphWalker Test Case Validator Sistemi
+
+## Genel Bakış
+
+Bu sistem, **GraphWalker tabanlı test case'lerini bir model grafiğine karşı doğrulayan bir model-based testing sistemidir**. Sistem, otomatik olarak oluşturulan test case'lerin (TLC - Test Log) model graph'ı (vertices ve edges) ile tutarlı olup olmadığını kontrol eder.
+
+## Sistem Mimarisi
+
+```
+TLC.txt (Test Log - GraphWalker çıktısı (Test için Gemini 3 Pro'ya oluşturtturuldu))
+    ↓
+tlc_runner.py (Test Case Parser)
+    ↓
+    ├─→ TLC.json (Model Graph)
+    ↓
+main.py (Test Executor & Validator)
+    ↓
+✅ PASS / ❌ FAIL (Test Result)
+```
+
+## Bileşenler ve Görevleri
+
+### 1. **TLC.txt - Test Log Dosyası**
+- **Kaynağı**: Gemini 3 Pro tarafından TLC.json modeli verilerek oluşturulan test çalıştırma günlüğü
+- **Format**: JSON satırları şeklinde (`{"currentElementName":"start"} {"currentElementName":"s"} ...`)
+- **İçerik**: Vertices (düğümler) ve Edges (kenarlar) sırası
+- **Örnek**:
+  ```
+  start -> (s edge) -> q0 -> (h edge) -> q8 -> (a edge) -> q1 ...
+  ```
+
+### 2. **TLC.json - Model Graph**
+- **Tanım**: Grafiğin yapısal tanımı
+- **İçerik**:
+  - **Vertices (Düğümler)**: `q0, q1, q2, q3, q4, q5, q7, q8, start`
+  - **Edges (Kenarlar)**: `s, h, a, b, c, d, e, f, g, i, j, k, l, m, n, o, p, r`
+- **Yapı**:
+  ```json
+  {
+    "nodes": [
+      {"id": "uid1", "name": "start"},
+      {"id": "uid2", "name": "q0"},
+      {"id": "uid3", "name": "q8"}
+    ],
+    "links": [
+      {"source": "uid1", "target": "uid2", "name": "s"},
+      {"source": "uid2", "target": "uid3", "name": "h"}
+    ]
+  }
+  ```
+
+### 3. **tlc_runner.py - Test Case Parser**
+
+#### Fonksiyon: `load_tlc_test_suite(tlc_path, remove_duplicates=False)`
+**Görev**: TLC.txt'i parse edip test case'e dönüştürme
+
+**İşlem Adımları**:
+1. TLC.txt dosyasından `"currentElementName"` değerlerini regex ile ayıklar
+2. Vertices ve edges'i sırasıyla tutacak şekilde test case'e dönüştürür
+3. Her `"start"` gördüğünde yeni test case başlatır
+
+**Örnek**:
+```python
+# Input: TLC.txt
+{"currentElementName":"start"} 
+{"currentElementName":"s"} 
+{"currentElementName":"q0"} 
+{"currentElementName":"h"} 
+{"currentElementName":"q8"}
+
+# Output: test_case
+['start', 's', 'q0', 'h', 'q8']
+```
+
+#### Fonksiyon: `run_tlc_on_model(tlc_path, model_json_name, verbose=True)`
+**Görev**: Model ve test case'i yükleyip executor'ı çalıştırır
+
+**İşlem Sırası**:
+1. Model grafiğini `TLC.json`'dan yükler
+2. Test case'i `TLC.txt`'den parse eder
+3. `apply_test_execution_on_model()` fonksiyonunu çağırır
+4. Sonucu True ya da False şeklinde döndürür
+
+### 4. **main.py - Test Executor & Validator**
+
+#### Fonksiyon: `apply_test_execution_on_model(test_suite, model, verbose=True)`
+**Görev**: Test case'i adım adım yürütüp her adımı model'e karşı doğrular
+
+**Doğrulama Mantığı**:
+
+```
+Test Case: ['start', 's', 'q0', 'h', 'q8', 'a', 'q1', ...]
+
+Adım 1: VERTEX BAŞLA
+├─ Item: 'start'
+├─ Kontrol: 'start' grafta var mı? ✅
+└─ Sonuç: previous_item = start_id
+
+Adım 2: EDGE KONTROL
+├─ Item: 's' (edge)
+├─ Kontrol: 's' edges_set'te var mı? ✅
+└─ Sonraki: vertex var mı? ✅ ('q0')
+
+Adım 3: VERTEX GEÇİŞ
+├─ Item: 'q0' (vertex)
+├─ Kontrol: 'q0' grafta var mı? ✅
+├─ Kontrol: start_id --(s)--> q0_id bağlantısı var mı? ✅
+└─ Sonuç: ✅ "successfully moved from start -> q0 via edge 's'"
+
+Adım 4: DEVAM
+├─ Item: 'h' (edge)
+├─ Item: 'q8' (vertex)
+├─ Kontrol: q0_id --(h)--> q8_id bağlantısı var mı? ✅
+└─ Sonuç: ✅ "successfully moved from q0 -> q8 via edge 'h'"
+
+...
+```
+
+**Özel Durum - Duplicate Vertices**:
+- Grafte aynı isimli birden fazla vertex vardı (örn: iki tane `q5`)
+- `nodes_dict` yapısı bunu destekler:
+  ```python
+  nodes_dict = {
+      'q0': [id1],
+      'q5': [id3, id4],  # ← İkisini de tutuyoruz!
+  }
+  ```
+- Geçiş kontrol edilirken **tüm matching ID'ler denenir**
+
+## Hata Kontrolü ve Validasyon
+
+Sistem 3 ana hata türünü kontrol eder:
+
+### **Hata 1: Bilinmeyen Vertex**
+```python
+test_case = [..., 'q999', ...]  # q999 grafta yok
+❌ ERROR: "Unknown node name in test case: q999"
+```
+
+### **Hata 2: Geçersiz Edge**
+```python
+test_case = [..., 'x', ...]  # 'x' edge'i grafta yok (olması gereken 's')
+❌ ERROR: "Invalid edge name in test case: 'x' (not found in model)"
+```
+
+### **Hata 3: Geçiş Bağlantısı Yok**
+```python
+# start -> q0 'x' edge'i ile gitmek isteniyor, fakat bu bağlantı yok
+❌ ERROR: "No path found for: start -> q0 via edge 'x'"
+```
+
+## Tam İşlem Örneği
+
+```
+INPUT:
+├─ TLC.txt: {"currentElementName":"start"} {"currentElementName":"s"} ...
+└─ TLC.json: Vertices [q0, q1, q8, start], Edges [s, h, a, ...]
+
+PROCESSING:
+├─ start ✅ (grafta var)
+├─ s ✅ (edge grafta var)
+├─ q0 ✅ (grafta var, start --(s)--> q0 bağlantısı var)
+├─ h ✅ (edge grafta var)
+├─ q8 ✅ (grafta var, q0 --(h)--> q8 bağlantısı var)
+├─ a ✅ (edge grafta var)
+├─ q1 ✅ (grafta var, q8 --(a)--> q1 bağlantısı var)
+└─ ... (devam)
+
+OUTPUT:
+✅ All passed
+```
+
+## Test Başarısız Senaryosu Örneği
+
+```
+Senaryo: TLC.txt'te 's' edge'i yerine 'x' yazılırsa
+
+INPUT:
+├─ TLC.txt: {"currentElementName":"start"} {"currentElementName":"x"} ...
+└─ TLC.json: [q0, q1, q8, start] edges: [s, h, a, ...]
+
+PROCESSING:
+├─ start ✅
+├─ x ❌ (edge 'x' grafte YOK!)
+└─ ERROR: "Invalid edge name in test case: 'x'"
+
+OUTPUT:
+❌ Some failed
+```
+
+## Dosya İlişkileri
+
+```
+workspace/
+├── main.py                     # Test Executor (apply_test_execution_on_model)
+├── tlc_runner.py               # Test Parser (load_tlc_test_suite, run_tlc_on_model)
+├── graph_conversions.py        # Model Loader (generate_graph_from_graphwalker_json)
+├── utility_functions.py        # Utility Functions (get_key_from_value_in_dict, etc.)
+└── json_models/
+    ├── TLC.txt                 # Test Case Log (GraphWalker çıktısı)
+    └── TLC.json                # Model Graph (GraphWalker modeli)
+```
+
+## Çalıştırma
+
+```bash
+python3 main.py
+```
+
+**Output**:
+```
+Test case to apply: ['start', 's', 'q0', 'h', 'q8', 'a', 'q1', ...]
+successfully moved from start -> q0 via edge 's'
+successfully moved from q0 -> q8 via edge 'h'
+successfully moved from q8 -> q1 via edge 'a'
+...
+All passed
+```
+
+## Teknik Detaylar
+
+### **Vertex vs Edge Ayrıştırması**
+- **Vertices**: `'start'` veya `'q'` ile başlayan (`q0, q1, q2, ...`)
+- **Edges**: Diğer tüm single-char veya multi-char strings (`s, h, a, b, ...`)
+
+### **Duplicate Vertex Handling**
+```python
+# Sorun: İki tane q5 var
+nodes_dict['q5'] = [id_q5_1, id_q5_2]
+
+# Çözüm: Tüm ID'leri deneme
+for current_id in nodes_dict['q5']:
+    if (previous_id, current_id, edge_name) valid?
+        → Success!
+```
+
+### **Test Suite Yapısı**
+```python
+test_suite = [
+    test_case_1 = ['start', 's', 'q0', 'h', 'q8', ...],  # 1. test
+    test_case_2 = ['start', 's', 'q0', 'k', 'q2', ...],  # 2. test
+    test_case_3 = ['start', 's', 'q0', 'l', 'q3', ...],  # 3. test
+]
+```

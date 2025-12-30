@@ -1,0 +1,37 @@
+import json
+import os.path
+
+
+def generate_graph_from_graphwalker_json(file_name):
+    file_path = os.path.join("json_models", file_name)
+
+    with open(file_path) as f:
+        json_data = json.load(f)
+        model_data = json_data.get("models")[0]
+        model = {
+            "directed": False,
+            "multigraph": False,
+            "graph": {"name": model_data["name"]},
+            "nodes": [],
+            "links": [],
+        }
+
+        for vertice in model_data["vertices"]:
+            vertice_dict = {
+                "id": vertice["id"],
+                "name": vertice["name"],
+                "x": vertice["properties"]["x"],
+                "y": vertice["properties"]["y"],
+            }
+            model["nodes"].append(vertice_dict)
+
+        for edge in model_data["edges"]:
+            edge_dict = {
+                "source": edge["sourceVertexId"],
+                "target": edge["targetVertexId"],
+                "id": edge["id"],
+                "name": edge["name"],
+            }
+            model["links"].append(edge_dict)
+
+        return model
